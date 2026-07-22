@@ -43,7 +43,7 @@ internal class OwinResponseMapper(IWireMockMiddlewareOptions options) : IOwinRes
     /// <inheritdoc />
     public async Task MapAsync(IResponseMessage? responseMessage, HttpResponse response)
     {
-        if (responseMessage == null || responseMessage is WebSocketHandledResponse)
+        if (responseMessage == null || responseMessage is HandledResponse)
         {
             return;
         }
