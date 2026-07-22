@@ -7,6 +7,7 @@ using System.Text;
 using ExampleIntegrationTest.Lookup;
 using Google.Protobuf.WellKnownTypes;
 using Greet;
+using Grpc.Core;
 using Grpc.Net.Client;
 using Moq;
 using WireMock.Constants;
@@ -30,6 +31,7 @@ package greet;
 
 service Greeter {
   rpc SayHello (HelloRequest) returns (HelloReply);
+  rpc SayHelloServerStreaming (HelloRequest) returns (stream HelloReply);
 }
 
 message HelloRequest {
@@ -819,6 +821,73 @@ message Other {
             x => x.WriteLine(
                 It.Is<string>(log => log.Contains("[Error]") && log.Contains("Exception"))),
             withEarlyMismatch ? Times.Never : Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task WireMockServer_WithBodyAsProtoBuf_ServerStreaming_FromJson_UsingGrpcGeneratedClient()
+    {
+        // Arrange
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var server = Given_When_ServerStarted_And_RunningOnHttpAndGrpc();
+        await Given_When_ProtoBufMappingIsAddedViaAdminInterfaceAsync(server, "protobuf-mapping-5.json", cancellationToken);
+
+        // Act
+        var channel = GrpcChannel.ForAddress(server.Urls[1]);
+        var client = new Greeter.GreeterClient(channel);
+
+        using var call = client.SayHelloServerStreaming(new HelloRequest { Name = "stef" }, cancellationToken: cancellationToken);
+
+        var messages = new List<string>();
+        await foreach (var reply in call.ResponseStream.ReadAllAsync(cancellationToken))
+        {
+            messages.Add(reply.Message);
+        }
+
+        // Assert
+        messages.Should().Equal("hello stef 1", "hello stef 2");
+
+        server.Stop();
+    }
+
+    [Fact]
+    public async Task WireMockServer_WithBodyAsProtoBuf_ServerStreaming_UsingGrpcGeneratedClient()
+    {
+        // Arrange
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var server = WireMockServer.Start(useHttp2: true);
+
+        server
+            .Given(Request.Create()
+                .UsingPost()
+                .WithPath("/greet.Greeter/SayHelloServerStreaming")
+                .WithBodyAsProtoBuf(ProtoDefinition, "greet.HelloRequest", new JsonMatcher(new { name = "stef" }))
+            )
+            .RespondWith(Response.Create()
+                .WithHeader("Content-Type", "application/grpc")
+                .WithTrailingHeader("grpc-status", "0")
+                .WithBodyAsProtoBuf(ProtoDefinition, "greet.HelloReply", new object[]
+                    {
+                        new { message = "hello stef 1" },
+                        new { message = "hello stef 2" },
+                        new { message = "hello stef 3" }
+                    }
+                )
+            );
+
+        // Act
+        var channel = GrpcChannel.ForAddress(server.Url!);
+        var client = new Greeter.GreeterClient(channel);
+
+        using var call = client.SayHelloServerStreaming(new HelloRequest { Name = "stef" }, cancellationToken: cancellationToken);
+
+        var messages = new List<string>();
+        await foreach (var reply in call.ResponseStream.ReadAllAsync(cancellationToken))
+        {
+            messages.Add(reply.Message);
+        }
+
+        // Assert
+        messages.Should().Equal("hello stef 1", "hello stef 2", "hello stef 3");
     }
 
     private static WireMockServer Given_When_ServerStarted_And_RunningOnHttpAndGrpc()
